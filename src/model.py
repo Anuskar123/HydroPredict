@@ -41,17 +41,9 @@ def _prepare_from_nepali_weather(
     - map key columns to a simpler schema (rainfall, temperature, humidity)
     - add temporal + lag + rolling features (time-series aware)
     """
-    df = pd.read_csv(dataset_path, parse_dates=["Date"])
+    df = pd.read_csv(dataset_path, parse_dates=["date"])
 
-    # Standardize core columns used by existing feature pipeline
-    rename_map = {
-        "Date": "date",
-        "District": "district",
-        "Precip": "rainfall_mm",
-        "Temp_2m": "temperature_c",
-        "RH_2m": "humidity_pct",
-    }
-    df = df.rename(columns=rename_map)
+    # Dataset already has correct column names from data_generator
 
     # ─── SYNTHETIC TARGET GENERATION ──────────────────────────────────────────
     # We must generate synthetic river flow and hydropower targets because

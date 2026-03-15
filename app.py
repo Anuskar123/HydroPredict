@@ -17,7 +17,10 @@ from src.data_generator import (
     DISTRICTS,
     HYDRO_PLANTS,
     generate_hourly_forecast_data,
+    _river_flow,
+    _hydro_generation,
 )
+import requests
 
 # ── Page Config ──────────────────────────────────────────────────────────────
 
@@ -226,10 +229,121 @@ with st.sidebar:
         help="Set the threshold below which a grid alert triggers",
     )
 
+    st.markdown("---")
+    use_real_weather = st.checkbox(
+        "Use Real-Time Weather API", 
+        value=False, 
+        help="Fetch live 5-day forecast from OpenWeather instead of using synthetic simulation data."
+    )
+
 # ── Generate Forecast Data ───────────────────────────────────────────────────
 
+@st.cache_data(ttl=900)
+def get_real_forecast(district_name: str, rain_mod: int, temp_mod: float, api_key: str):
+    coords = DISTRICT_COORDS.get(district_name)
+    if not coords:
+        st.error(f"Coordinates not found for {district_name}")
+        return pd.DataFrame()
+
+    url = f"https://api.openweathermap.org/data/2.5/forecast?lat={coords['lat']}&lon={coords['lon']}&appid={api_key}&units=metric"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        st.error(f"Failed to fetch real-time weather: {e}")
+        return get_synthetic_forecast(district_name, rain_mod, temp_mod)
+        
+    records = []
+    for item in data.get("list", []):
+        dt = pd.to_datetime(item["dt"], unit="s")
+        temp = item["main"]["temp"]
+        humidity = item["main"]["humidity"]
+        rain = item.get("rain", {}).get("3h", 0.0)
+        records.append({
+            "datetime": dt,
+            "temperature_c": temp,
+            "humidity_pct": humidity,
+            "rainfall_mm": rain / 3.0, 
+        })
+        
+    df = pd.DataFrame(records)
+    if df.empty:
+        return get_synthetic_forecast(district_name, rain_mod, temp_mod)
+
+    # OpenWeather returns 3-hourly data. Resample to 1-hour intervals.
+    df = df.set_index("datetime").resample("1h").interpolate(method="linear").reset_index()
+    df = df.head(72)
+    
+    if rain_mod != 0:
+        factor = 1 + rain_mod / 100
+        df["rainfall_mm"] = np.clip(df["rainfall_mm"] * factor, 0, None).round(2)
+    if temp_mod != 0:
+        df["temperature_c"] = (df["temperature_c"] + temp_mod).round(1)
+
+    props = DISTRICTS[district_name]
+    cap = HYDRO_PLANTS[props["river"]]["capacity_mw"]
+    
+    flow = _river_flow(df["rainfall_mm"].values * 24, df["temperature_c"].values, props["elevation"])
+    flow = np.clip(flow, 5, 500).round(2)
+    
+    if rain_mod != 0:
+        flow_adjustment = 1 + (rain_mod / 100) * 0.6
+        flow = np.clip(flow * flow_adjustment, 5, 500).round(2)
+    if temp_mod != 0:
+        snowmelt_effect = max(0, temp_mod * 0.02)
+        flow = (flow * (1 + snowmelt_effect)).round(2)
+
+    df["river_flow_cumecs"] = flow
+    generation = _hydro_generation(flow, cap)
+    df["predicted_generation_mw"] = np.clip(generation, 0, cap).round(2)
+    df["plant_capacity_mw"] = cap
+    
+    if artifacts and artifacts["model"]:
+        try:
+            current_physics_gen = df["predicted_generation_mw"].mean()
+            daily_stats = {
+                "rainfall_mm": df["rainfall_mm"].sum() / 3.0,
+                "temperature_c": df["temperature_c"].mean(),
+                "humidity_pct": df["humidity_pct"].mean(),
+                "river_flow_cumecs": df["river_flow_cumecs"].mean(),
+                "generation_mw": current_physics_gen,
+                "day_of_year": df["datetime"].dt.dayofyear.iloc[0],
+                "month": df["datetime"].dt.month.iloc[0],
+                "Latitude": coords["lat"], 
+                "Longitude": coords["lon"], 
+            }
+            doy = daily_stats["day_of_year"]
+            daily_stats["sin_doy"] = np.sin(2 * np.pi * doy / 365)
+            daily_stats["cos_doy"] = np.cos(2 * np.pi * doy / 365)
+            daily_stats["sin_month"] = np.sin(2 * np.pi * daily_stats["month"] / 12)
+            daily_stats["cos_month"] = np.cos(2 * np.pi * daily_stats["month"] / 12)
+            daily_stats["is_monsoon"] = 1 if daily_stats["month"] in [6, 7, 8, 9] else 0
+
+            input_data = pd.DataFrame([daily_stats])
+            for col in artifacts["features"]:
+                if col not in input_data.columns:
+                    base_col = col.split("_lag")[0].split("_rmean")[0].split("_rstd")[0].split("_cumsum")[0]
+                    if base_col in daily_stats:
+                        input_data[col] = daily_stats[base_col]
+                    else:
+                        input_data[col] = 0.0
+            
+            predicted_daily_gen = artifacts["model"].predict(input_data[artifacts["features"]])[0]
+            predicted_daily_gen = np.clip(predicted_daily_gen, 0, cap)
+            
+            current_daily_avg = df["predicted_generation_mw"].mean()
+            if current_daily_avg > 0:
+                scale_factor = predicted_daily_gen / current_daily_avg
+                df["predicted_generation_mw"] = (df["predicted_generation_mw"] * scale_factor * 0.8) + (df["predicted_generation_mw"] * 0.2)
+                df["predicted_generation_mw"] = np.clip(df["predicted_generation_mw"], 0, cap).round(2)
+        except Exception as e:
+            print(f"Model prediction failed: {e}")
+            
+    return df
+
 @st.cache_data(ttl=300)
-def get_forecast(district_name: str, rain_mod: int, temp_mod: float):
+def get_synthetic_forecast(district_name: str, rain_mod: int, temp_mod: float):
     # 1. Generate Weather & Hydrology Logic (Physics-based Simulation)
     df = generate_hourly_forecast_data(
         base_date="2026-03-15",
@@ -318,7 +432,11 @@ def get_forecast(district_name: str, rain_mod: int, temp_mod: float):
     return df
 
 
-forecast_df = get_forecast(district, rain_modifier, temp_modifier)
+API_KEY = "c0fdf4e74031a94a71626a0fdcb31e59"
+if use_real_weather:
+    forecast_df = get_real_forecast(district, rain_modifier, temp_modifier, API_KEY)
+else:
+    forecast_df = get_synthetic_forecast(district, rain_modifier, temp_modifier)
 
 # ── Hero Header ──────────────────────────────────────────────────────────────
 
@@ -537,7 +655,10 @@ for d in sorted(DISTRICTS.keys()):
         df_d = forecast_df
     else:
         # Apply the same scenario settings (rain/temp) to all districts for consistency
-        df_d = get_forecast(d, rain_modifier, temp_modifier)
+        if use_real_weather:
+            df_d = get_real_forecast(d, rain_modifier, temp_modifier, API_KEY)
+        else:
+            df_d = get_synthetic_forecast(d, rain_modifier, temp_modifier)
         
     props = DISTRICTS[d]
     r = props["river"]
