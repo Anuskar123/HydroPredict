@@ -1,9 +1,9 @@
 {
-  "mae": 0.1709,
-  "rmse": 0.2214,
-  "r2": 0.9996,
-  "cv_mae_mean": 2.2522,
-  "cv_mae_std": 1.4913,
-  "n_features": 69,
-  "n_samples": 10890
+  "mae": 0.0286,
+  "rmse": 0.0581,
+  "r2": 1.0,
+  "cv_mae_mean": 35.4374,
+  "cv_mae_std": 29.1276,
+  "n_features": 82,
+  "n_samples": 114417
 }

@@ -62,11 +62,10 @@ streamlit run app.py
 
 | Dataset | Source | Role |
 |---------|--------|------|
-| Nepal Multi-District Weather (2020-2025) | [Kaggle](https://www.kaggle.com/datasets/dipeshthapa1/nepal-multi-district-weather-dataset-2020-2025) | Temperature, rainfall, humidity |
-| Pokhara Weather (2009-2023) | [Kaggle](https://www.kaggle.com/datasets/gauravneupane/pokhara-weather-data-from-2009-to-2023) | Historical climate patterns |
-| River Level Data | [hydrology.gov.np](http://www.hydrology.gov.np) | River flow measurements |
+| **Nepal Multi-District Weather** | Local `data/nepali_multi_district.csv` | **REAL** historical weather (2020-2025) covering Temp, Precip, Humidity. |
+| River Flow & Generation | Physics-based Simulation | Modeled target variables derived from real weather inputs. |
 
-The MVP uses synthetic data modeled on these sources' schemas and Nepal's real climate patterns. Swap in real CSVs by placing them in `data/`.
+> **Data Strategy:** The model trains on **real-world weather observations** from 2020 to 2025. Since granular hourly generation data is proprietary, we generate the target variable (`generation_mw`) using a standard hydrological physics model ($Q = f(Precip, Temp, Elevation)$) to create a ground-truth dataset for the AI to learn.
 
 ## Features
 
