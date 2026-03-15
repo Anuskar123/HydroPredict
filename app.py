@@ -141,7 +141,7 @@ DISTRICT_COORDS = {
     "Surkhet": {"lat": 28.6, "lon": 81.63}, "Syangja": {"lat": 28.08, "lon": 83.87},
     "Tanahun": {"lat": 27.93, "lon": 84.25}, "Taplejung": {"lat": 27.35, "lon": 87.67},
     "Terhathum": {"lat": 27.12, "lon": 87.58}, "Udayapur": {"lat": 26.85, "lon": 86.67},
-    "Rukum West": {"lat": 28.63, "lon": 82.45}
+    "Rukum West": {"lat": 28.63, "lon": 82.45}, "Nawalpur": {"lat": 27.6, "lon": 84.0}
 }
 
 PLOT_LAYOUT = dict(
@@ -242,8 +242,8 @@ with st.sidebar:
 def get_real_forecast(district_name: str, rain_mod: int, temp_mod: float, api_key: str):
     coords = DISTRICT_COORDS.get(district_name)
     if not coords:
-        st.error(f"Coordinates not found for {district_name}")
-        return pd.DataFrame()
+        st.error(f"Coordinates not found for {district_name}, falling back to synthetic.")
+        return get_synthetic_forecast(district_name, rain_mod, temp_mod)
 
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={coords['lat']}&lon={coords['lon']}&appid={api_key}&units=metric"
     try:
